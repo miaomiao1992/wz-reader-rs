@@ -234,36 +234,50 @@ impl WzPng {
         let capacity = self.get_buff_size()?;
 
         if self.has_zlib_header() {
-            inflate(true, data, capacity)
-        } else {
-            let mut keys = self.reader.keys.write().unwrap();
-
-            let total_end = self.offset + self.block_size;
-
-            let mut offset = self.offset;
-            let mut end = 0;
-
-            let mut decrypted = Vec::with_capacity(self.block_size);
-
-            while offset < total_end {
-                let block_size = self.reader.read_i32_at(offset).unwrap() as usize;
-                offset += 4;
-
-                let data = self.reader.get_slice(offset..(offset + block_size));
-                offset += block_size;
-
-                decrypted.extend_from_slice(data);
-
-                keys.ensure_key_size(data.len()).unwrap();
-
-                keys.decrypt_slice(&mut decrypted[end..(end + block_size)]);
-
-                end += block_size;
+            // First try zlib decompression, then raw deflate (with and without
+            // the 2-byte header). If all fail, the data may actually be
+            // block-encrypted with a header that coincidentally looks like zlib.
+            if let Ok(v) = inflate(true, data, capacity) {
+                return Ok(v);
             }
-
-            /* the total chunk shoud start decryption at index 2 */
-            inflate(false, &decrypted[2..], capacity)
+            if let Ok(v) = inflate(false, data, capacity) {
+                return Ok(v);
+            }
+            if data.len() > 2 {
+                if let Ok(v) = inflate(false, &data[2..], capacity) {
+                    return Ok(v);
+                }
+            }
+            // fall through to encrypted block path
         }
+
+        let mut keys = self.reader.keys.write().unwrap();
+
+        let total_end = self.offset + self.block_size;
+
+        let mut offset = self.offset;
+        let mut end = 0;
+
+        let mut decrypted = Vec::with_capacity(self.block_size);
+
+        while offset < total_end {
+            let block_size = self.reader.read_i32_at(offset).unwrap() as usize;
+            offset += 4;
+
+            let data = self.reader.get_slice(offset..(offset + block_size));
+            offset += block_size;
+
+            decrypted.extend_from_slice(data);
+
+            keys.ensure_key_size(data.len()).unwrap();
+
+            keys.decrypt_slice(&mut decrypted[end..(end + block_size)]);
+
+            end += block_size;
+        }
+
+        /* the total chunk shoud start decryption at index 2 */
+        inflate(false, &decrypted[2..], capacity)
     }
 }
 

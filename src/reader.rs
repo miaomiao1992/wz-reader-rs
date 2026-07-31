@@ -713,8 +713,9 @@ impl<T: AsRef<[u8]>> Reader for WzBaseReader<T> {
     #[inline]
     fn get_pkg2_decrypt_slice(&self, range: std::ops::Range<usize>) -> Result<Vec<u8>> {
         let len = range.len();
+        let start = range.start;
         let buffer = self.get_slice_or_error(range)?;
-        get_decrypt_slice(buffer, len, &self.pkg2_keys)
+        get_pkg2_decrypt_slice(buffer, len, start, self.header.fstart, &self.pkg2_keys)
     }
 }
 
@@ -772,8 +773,9 @@ impl<'a> Reader for WzSliceReader<'a> {
     #[inline]
     fn get_pkg2_decrypt_slice(&self, range: std::ops::Range<usize>) -> Result<Vec<u8>> {
         let len = range.len();
+        let start = range.start;
         let buffer = self.get_slice_or_error(range)?;
-        get_decrypt_slice(buffer, len, &self.pkg2_keys)
+        get_pkg2_decrypt_slice(buffer, len, start, self.header.fstart, &self.pkg2_keys)
     }
 }
 
@@ -940,6 +942,32 @@ pub fn get_decrypt_slice(
     }
 
     keys.read().unwrap().decrypt_slice(&mut original);
+
+    Ok(original)
+}
+
+/// Decrypt a PKG2 directory-name payload, applying KMST1204 position state when needed.
+pub fn get_pkg2_decrypt_slice(
+    buf: &[u8],
+    len: usize,
+    data_offset: usize,
+    header_size: usize,
+    keys: &SharedWzStringDecryptor,
+) -> Result<Vec<u8>> {
+    let mut original = buf.to_vec();
+
+    {
+        println!("get_pkg2_decrypt_slice");
+        let mut write = keys.write().unwrap();
+        if write.get_enc_type() == crate::util::string_decryptor::DecrypterType::KMST1204 {
+            // C# PreReader stream is based at dirStart; ApplyState uses that relative position.
+            let length_prefix_pos = data_offset.saturating_sub(2);
+            let relative_pos = length_prefix_pos.saturating_sub(header_size) as u64;
+            write.apply_file_position(relative_pos);
+        }
+        write.decrypt_slice(&mut original);
+    }
+    println!("get_pkg2_decrypt_slice done");
 
     Ok(original)
 }

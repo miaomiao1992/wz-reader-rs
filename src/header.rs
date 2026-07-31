@@ -65,6 +65,12 @@ impl WzHeader {
         self.flags.contains(WzHeaderFlag::PKG2_RANDOM_HEADER64)
     }
 
+    /// KMST1204 uses a 200-byte random header; KMST1202 uses 150 bytes.
+    #[inline]
+    pub fn is_pkg2_1204(&self) -> bool {
+        self.is_pkg2_64() && self.fstart == U64_HEADER_LEN_V2
+    }
+
     #[inline]
     pub fn get_header_slice(buf: &[u8]) -> &[u8] {
         let fstart = Self::get_wz_fstart(buf).unwrap() as usize;
@@ -113,6 +119,14 @@ impl WzHeader {
         header.ident = Self::get_ident(buf)?;
 
         if header.ident == PKGVersion::Unknown {
+            if let Ok(result) = WzHeader::read_pkg2_random_header_from_buf(
+                buf,
+                U64_HEADER_LEN_V2,
+                read_kmst1204_random_header,
+                WzHeaderFlag::PKG2_RANDOM_HEADER64,
+            ) {
+                return Ok(result);
+            }
             if let Ok(result) = WzHeader::read_pkg2_random_header_from_buf(
                 buf,
                 U64_HEADER_LEN,
@@ -190,6 +204,7 @@ impl WzHeader {
 
 const U32_HEADER_LEN: usize = 60 + 8;
 const U64_HEADER_LEN: usize = 150;
+const U64_HEADER_LEN_V2: usize = 200;
 
 type ReadHeaderDataFn = fn(&[u8]) -> (u64, u64, u64);
 
@@ -210,5 +225,17 @@ fn read_kmst1202_random_header(buf: &[u8]) -> (u64, u64, u64) {
         buf[0x8E], buf[0x8C], buf[0x93], buf[0x0E], buf[0x64], buf[0x7B], buf[0x2E], buf[0x4D],
     ]);
     let fsize = u32::from_le_bytes([buf[0x12], buf[0x09], buf[0x02], buf[0x95]]) as u64;
+    (hash1, hash2, fsize)
+}
+
+#[inline]
+fn read_kmst1204_random_header(buf: &[u8]) -> (u64, u64, u64) {
+    let hash1 = u64::from_le_bytes([
+        buf[0x1E], buf[0x1A], buf[0x10], buf[0x01], buf[0x0F], buf[0x48], buf[0xC5], buf[0x99],
+    ]);
+    let hash2 = u64::from_le_bytes([
+        buf[0x64], buf[0x6C], buf[0x25], buf[0x16], buf[0x0A], buf[0x03], buf[0xA2], buf[0xAA],
+    ]);
+    let fsize = u32::from_le_bytes([buf[0x14], buf[0xB0], buf[0xB6], buf[0xB7]]) as u64;
     (hash1, hash2, fsize)
 }

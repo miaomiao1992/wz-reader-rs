@@ -3,9 +3,12 @@ use crate::util::string_decryptor::DecrypterType;
 
 #[derive(Debug)]
 pub struct Pkg2Decryptor {
-    iv: u32,
+    iv: u64,
     enc_type: DecrypterType,
     keys: [u8; 8],
+    /// KMST1204: position-dependent key material
+    hash1: u64,
+    hash_version: u64,
 }
 
 impl Default for Pkg2Decryptor {
@@ -14,6 +17,8 @@ impl Default for Pkg2Decryptor {
             iv: 0,
             enc_type: DecrypterType::KMST1199,
             keys: [0; 8],
+            hash1: 0,
+            hash_version: 0,
         }
     }
 }
@@ -27,15 +32,9 @@ impl Pkg2Decryptor {
         decryptor
     }
     fn calculate_keys(&mut self, key: u64) {
-        self.iv = key as u32;
+        self.iv = key;
 
         let k = key.to_le_bytes();
-
-        // for i in 0..4 {
-        //     let shifted_tuple = ((key >> 8 * i) as u16).to_le_bytes();
-        //     self.keys[i * 2] = shifted_tuple[0];
-        //     self.keys[i * 2 + 1] = shifted_tuple[1];
-        // }
 
         self.keys[0] = k[0];
         self.keys[1] = k[1];
@@ -58,14 +57,42 @@ impl Decryptor for Pkg2Decryptor {
 
     fn set_iv(&mut self, key: u64, enc_type: DecrypterType) {
         self.enc_type = enc_type;
-        self.calculate_keys(key);
+        if enc_type != DecrypterType::KMST1204 {
+            self.calculate_keys(key);
+        }
+    }
+
+    fn set_key_material(&mut self, hash1: u64, hash_version: u64, enc_type: DecrypterType) {
+        self.enc_type = enc_type;
+        self.hash1 = hash1;
+        self.hash_version = hash_version;
+        if enc_type == DecrypterType::KMST1204 {
+            self.apply_file_position(0);
+        } else if enc_type == DecrypterType::KMST1202 {
+            self.calculate_keys(get_kmst1202_key(hash1, hash_version));
+        } else if enc_type == DecrypterType::KMST1199 {
+            self.calculate_keys(get_kmst1199_key(hash1 as u32, hash_version as u32) as u64);
+        } else {
+            self.calculate_keys(hash_version);
+        }
+    }
+
+    fn apply_file_position(&mut self, file_position: u64) {
+        if self.enc_type != DecrypterType::KMST1204 {
+            return;
+        }
+        self.calculate_keys(get_kmst1204_key(
+            self.hash1,
+            self.hash_version,
+            file_position,
+        ));
     }
 
     fn get_enc_type(&self) -> DecrypterType {
         self.enc_type
     }
     fn get_iv_hash(&self) -> u64 {
-        self.iv.into()
+        self.iv
     }
     fn is_enough(&self, _size: usize) -> bool {
         true
@@ -97,6 +124,15 @@ pub fn get_kmst1199_key(hash1: u32, hash_version: u32) -> u32 {
 
 pub fn get_kmst1202_key(hash1: u64, hash_version: u64) -> u64 {
     hash1 ^ hash_version ^ 0x66B57FEE317FD3DF
+}
+
+/// KMST1204 position-dependent directory string key.
+#[inline]
+pub fn get_kmst1204_key(hash1: u64, hash_version: u64, file_position: u64) -> u64 {
+    hash1
+        ^ hash_version
+        ^ 0x21810F65FEC32BDC_u64
+        ^ 0x9E3779B97F4A7C15_u64.wrapping_mul(file_position)
 }
 
 #[inline(always)]

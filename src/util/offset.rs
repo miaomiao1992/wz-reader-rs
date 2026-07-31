@@ -145,22 +145,39 @@ pub fn read_wz_offset_pkg2_v3(header: &WzHeader, meta: &WzOffsetMeta) -> Result<
     Ok(offset as usize)
 }
 
-/// calculate the offset of the specific data like wz image/directory in wz file,
-/// only work in pkg2 with version 1202-1203
+/// Shared key used by KMST1202/1204 offset and length decryption.
 #[inline]
-pub fn read_wz_offset_pkg2_64_v1(header: &WzHeader, meta: &WzOffsetMeta) -> Result<usize> {
-    let offset = meta.offset as u32;
+pub fn calc_pkg2_64_v1_shared_key(header: &WzHeader, hash: u64, file_pos: u32) -> u32 {
     let header_size = header.fstart as u32;
-    let pre_hash = header.hash1_u32() ^ meta.hash_u32();
+    let pre_hash = header.hash1_u32() ^ (hash as u32);
     let mixed_hash = pre_hash ^ 0x33BBBB33;
 
-    let offset = offset.wrapping_sub(header_size);
-    let offset = !offset;
-    let offset = offset.wrapping_mul(pre_hash.wrapping_add(mixed_hash ^ 0xA7E3C093));
-    let offset = offset.wrapping_sub(WZ_OFFSET);
-    let offset = offset ^ header.hash1_u32().wrapping_mul(0x01010101);
-    let offset = offset ^ mixed_hash.wrapping_mul(0x9E3779B9);
-    let offset = offset.rotate_left(19);
+    let mut key = file_pos.wrapping_sub(header_size);
+    key = !key;
+    key = key.wrapping_mul(pre_hash.wrapping_add(mixed_hash ^ 0xA7E3C093));
+    key = key.wrapping_sub(WZ_OFFSET);
+    key ^= header.hash1_u32().wrapping_mul(0x01010101);
+    key ^= mixed_hash.wrapping_mul(0x9E3779B9);
+    key.rotate_left(19)
+}
+
+/// KMST1204 encrypts directory entry size/checksum with the shared offset key.
+#[inline]
+pub fn calc_pkg2_64_v1_length(
+    header: &WzHeader,
+    hash: u64,
+    file_pos: u32,
+    encrypted_value: i32,
+) -> i32 {
+    encrypted_value ^ (calc_pkg2_64_v1_shared_key(header, hash, file_pos) as i32)
+}
+
+/// calculate the offset of the specific data like wz image/directory in wz file,
+/// only work in pkg2 with version 1202-1204
+#[inline]
+pub fn read_wz_offset_pkg2_64_v1(header: &WzHeader, meta: &WzOffsetMeta) -> Result<usize> {
+    let header_size = header.fstart as u32;
+    let offset = calc_pkg2_64_v1_shared_key(header, meta.hash, meta.offset as u32);
     let offset = offset ^ !meta.encrypted_offset;
     let offset = offset.wrapping_add(header_size);
 

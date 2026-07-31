@@ -1,7 +1,11 @@
 use crate::{
     property::WzStringMeta,
     reader,
-    util::{offset::WzOffsetMeta, profile::WzProfile, version::PKGVersion},
+    util::{
+        offset::{calc_pkg2_64_v1_length, WzOffsetMeta},
+        profile::WzProfile,
+        version::PKGVersion,
+    },
     wz_image, Reader, WzImage, WzNode, WzNodeArc, WzNodeArcVec, WzNodeName, WzObjectType, WzReader,
     WzSliceReader,
 };
@@ -111,7 +115,8 @@ impl WzDirectory {
     }
 
     pub fn resolve_children(&mut self, parent: &WzNodeArc) -> Result<WzNodeArcVec, Error> {
-        if self.block_size == 0 {
+        // PKG2 64-bit directories often store size=0; content is still present at offset.
+        if self.block_size == 0 && !self.reader.header.is_pkg2_64() {
             return Ok(vec![]);
         }
 
@@ -233,7 +238,10 @@ impl WzDirectory {
         &self,
         reader: &WzSliceReader,
     ) -> Result<Vec<WzDirectoryEntry>, Error> {
-        let encrypted_entry_count = reader.read_wz_int64()?;
+        let _encrypted_entry_count = reader.read_wz_int64()?;
+
+        let all_names_use_v2 = self.profile.all_names_use_pkg2_v2();
+        let encrypt_entry_data = self.profile.encrypts_entry_data();
 
         let mut wz_dir_entries: Vec<WzDirectoryEntry> = vec![];
         let mut current_total_size = 0;
@@ -242,12 +250,16 @@ impl WzDirectory {
          * - encrypted_entry_count: i64
          * - WzDirectoryEntry[]
          * - encrypted_offset(u32)[]
+         *
+         * Entry count is encrypted and not needed for parsing; keep reading until
+         * the remaining payload (entry sizes + offset slots) fills the block.
          */
         loop {
             let entry = WzDirectoryEntry::read_pkg2_64_entry(
                 reader,
-                encrypted_entry_count,
-                wz_dir_entries.is_empty(),
+                wz_dir_entries.is_empty() || all_names_use_v2,
+                encrypt_entry_data,
+                self.hash,
             )?;
 
             /* 4 for the encrypted_offset */
@@ -426,8 +438,9 @@ impl WzDirectoryEntry {
 
     pub fn read_pkg2_64_entry(
         reader: &WzSliceReader,
-        _encrypted_entry_count: i64,
         use_pkg2_dir_read: bool,
+        encrypt_entry_data: bool,
+        hash: u64,
     ) -> Result<Self, Error> {
         let mut entry = WzDirectoryEntry {
             dir_type: reader.read_u8()?.into(),
@@ -447,8 +460,22 @@ impl WzDirectoryEntry {
             }
         }
 
-        entry.size = reader.read_wz_int()? as usize;
-        entry._checksum = reader.read_wz_int()?;
+        let size_pos = reader.pos.get() as u32;
+        let mut size = reader.read_wz_int()?;
+        let checksum_pos = reader.pos.get() as u32;
+        let mut checksum = reader.read_wz_int()?;
+
+        if encrypt_entry_data {
+            size = calc_pkg2_64_v1_length(&reader.header, hash, size_pos, size);
+            checksum = calc_pkg2_64_v1_length(&reader.header, hash, checksum_pos, checksum);
+        }
+
+        if size < 0 {
+            return Err(Error::InvalidWzVersion);
+        }
+
+        entry.size = size as usize;
+        entry._checksum = checksum;
 
         Ok(entry)
     }
@@ -463,7 +490,6 @@ impl WzDirectoryEntry {
             if !wz_image::is_valid_image_header(header_byte) {
                 return Err(Error::InvalidWzVersion);
             }
-            // should we try to parse the wz_image?
         } else if self.dir_type == WzDirectoryType::WzDirectory {
             reader.seek(self.offset);
 

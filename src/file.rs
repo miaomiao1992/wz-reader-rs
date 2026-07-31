@@ -1,7 +1,7 @@
 use crate::util::string_decryptor::pkg2_decryptor::{get_kmst1199_key, get_kmst1202_key};
 use crate::{
     directory, reader, util, util::profile, util::string_decryptor, util::version::PKGVersion,
-    wz_image, Reader, SharedWzStringDecryptor, WzDirectory, WzNodeArc, WzNodeArcVec, WzNodeCast,
+    wz_image, SharedWzStringDecryptor, WzDirectory, WzNodeArc, WzNodeArcVec, WzNodeCast,
     WzObjectType, WzReader,
 };
 use memmap2::Mmap;
@@ -235,7 +235,7 @@ impl WzFile {
         let cached_profiles = profile::PKG2_PROFILE_CACHE.read().unwrap().clone();
 
         for cached_profile in cached_profiles.iter() {
-            if cached_profile.profile.should_be_pkg2_64() != self.reader.header.is_pkg2_64() {
+            if !cached_profile.profile.matches_header(&self.reader.header) {
                 continue;
             }
             if !cached_profile.verify_hash(hash1, hash2) {
@@ -265,7 +265,7 @@ impl WzFile {
         }
 
         for profile in profile::get_all_pkg2_profiles() {
-            if profile.should_be_pkg2_64() != self.reader.header.is_pkg2_64() {
+            if !profile.matches_header(&self.reader.header) {
                 continue;
             }
 
@@ -369,15 +369,9 @@ impl WzFile {
     }
 
     fn update_keys(&self, profile: &profile::WzProfile, hash1: u64, target_hash: u64) {
-        let iv = if profile.should_be_pkg2_64() {
-            get_kmst1202_key(hash1, target_hash)
-        } else {
-            get_kmst1199_key(hash1 as u32, target_hash as u32) as u64
-        };
-        self.reader
-            .pkg2_keys
-            .write()
-            .unwrap()
-            .set_iv(iv, profile.decryptor_type);
+        let mut keys = self.reader.pkg2_keys.write().unwrap();
+        if profile.decryptor_type.need_init_key() {
+            keys.set_key_material(hash1, target_hash, profile.decryptor_type);
+        }
     }
 }

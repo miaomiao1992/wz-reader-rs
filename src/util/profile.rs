@@ -1,5 +1,6 @@
 use crate::{
-    util::{offset::WzOffsetVersion, string_decryptor::DecrypterType},
+    header::WzHeader,
+    util::{offset::WzOffsetVersion, string_decryptor::DecrypterType, version::PKGVersion},
     version::pkg2::{Pkg2VersionGen, Pkg2VersionGenV6},
 };
 use std::sync::{LazyLock, RwLock};
@@ -8,6 +9,7 @@ use std::sync::{LazyLock, RwLock};
 pub enum WzProfileVersion {
     #[default]
     Pkg1,
+    Pkg2V1204,
     Pkg2V1202,
     Pkg2V1201,
     Pkg2V1200,
@@ -44,8 +46,30 @@ impl Default for WzProfile {
 
 impl WzProfile {
     pub fn should_be_pkg2_64(&self) -> bool {
-        self.name == WzProfileVersion::Pkg2V1202
+        matches!(
+            self.name,
+            WzProfileVersion::Pkg2V1202 | WzProfileVersion::Pkg2V1204
+        )
     }
+
+    /// Whether entry size/checksum fields are encrypted (KMST1204).
+    pub fn encrypts_entry_data(&self) -> bool {
+        matches!(self.name, WzProfileVersion::Pkg2V1204)
+    }
+
+    /// Whether every directory entry name uses the PKG2 V2 (u16 length) encoding.
+    pub fn all_names_use_pkg2_v2(&self) -> bool {
+        self.name == WzProfileVersion::Pkg2V1204
+    }
+
+    pub fn matches_header(&self, header: &WzHeader) -> bool {
+        match self.name {
+            WzProfileVersion::Pkg2V1204 => header.is_pkg2_1204(),
+            WzProfileVersion::Pkg2V1202 => header.is_pkg2_64() && !header.is_pkg2_1204(),
+            _ => header.ident == PKGVersion::V2 && !header.is_pkg2_64(),
+        }
+    }
+
     pub fn get_hash_iter(&self, hash1: u64, hash2: u64) -> Box<dyn Iterator<Item = u64>> {
         if self.version_gen.is_u64_hash() {
             Box::new(self.version_gen.get_generator_u64(hash1, hash2).get_iter())
@@ -62,6 +86,12 @@ impl WzProfile {
 
 pub fn get_all_pkg2_profiles() -> Vec<WzProfile> {
     vec![
+        WzProfile {
+            name: WzProfileVersion::Pkg2V1204,
+            decryptor_type: DecrypterType::KMST1204,
+            version_gen: Pkg2VersionGen::V6,
+            offset_version: WzOffsetVersion::Pkg2_64V1,
+        },
         WzProfile {
             name: WzProfileVersion::Pkg2V1202,
             decryptor_type: DecrypterType::KMST1202,

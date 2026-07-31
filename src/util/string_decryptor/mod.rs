@@ -23,6 +23,15 @@ pub trait Decryptor: std::fmt::Debug + Send + Sync {
     fn decrypt_slice(&self, data: &mut [u8]);
     fn ensure_key_size(&mut self, size: usize) -> Result<(), String>;
     fn get_enc_type(&self) -> DecrypterType;
+
+    /// Optional hash material for dynamic PKG2 keys (KMST1199/1202/1204).
+    fn set_key_material(&mut self, _hash1: u64, _hash_version: u64, enc_type: DecrypterType) {
+        // Default: ignore hash1 and rely on set_iv callers.
+        let _ = enc_type;
+    }
+
+    /// KMST1204: recompute the string key for a file position.
+    fn apply_file_position(&mut self, _file_position: u64) {}
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -33,6 +42,7 @@ pub enum DecrypterType {
     KMST1198,
     KMST1199,
     KMST1202,
+    KMST1204,
     Custom,
     #[default]
     Unknown,
@@ -40,7 +50,10 @@ pub enum DecrypterType {
 
 impl DecrypterType {
     pub fn need_init_key(&self) -> bool {
-        matches!(self, DecrypterType::KMST1199 | DecrypterType::KMST1202)
+        matches!(
+            self,
+            DecrypterType::KMST1199 | DecrypterType::KMST1202 | DecrypterType::KMST1204
+        )
     }
 }
 
@@ -202,8 +215,8 @@ impl StringDecryptor {
             DecrypterType::KMS => Arc::clone(&self.kms) as SharedWzStringDecryptor,
             DecrypterType::Custom => self.custom.get().unwrap().clone() as SharedWzStringDecryptor,
             DecrypterType::KMST1198 => Arc::clone(&self.kmst1198) as SharedWzStringDecryptor,
-            /* KMST1199 key is calculate dynamically so we always return a new one */
-            DecrypterType::KMST1199 | DecrypterType::KMST1202 => {
+            /* dynamic PKG2 keys are calculated per-file */
+            DecrypterType::KMST1199 | DecrypterType::KMST1202 | DecrypterType::KMST1204 => {
                 Arc::new(RwLock::new(Pkg2Decryptor::default())) as SharedWzStringDecryptor
             }
             _ => Arc::clone(&self.general) as SharedWzStringDecryptor,

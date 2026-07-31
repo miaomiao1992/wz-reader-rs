@@ -48,11 +48,7 @@ impl WzProfile {
     }
     pub fn get_hash_iter(&self, hash1: u64, hash2: u64) -> Box<dyn Iterator<Item = u64>> {
         if self.version_gen.is_u64_hash() {
-            Box::new(
-                self.version_gen
-                    .get_generator_u64(hash1, hash2)
-                    .get_iter(),
-            )
+            Box::new(self.version_gen.get_generator_u64(hash1, hash2).get_iter())
         } else {
             Box::new(
                 self.version_gen

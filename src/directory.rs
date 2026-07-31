@@ -186,7 +186,14 @@ impl WzDirectory {
 
         let mut wz_dir_entries: Vec<WzDirectoryEntry> = vec![];
 
-        // currently we don't know how to decrypt the entry_count, so we will just keep reading until get the encrypted_offset_count
+        /* pkg2 entry structure:
+         * - encrypted_entry_count: i32
+         * - WzDirectoryEntry[]
+         * - encrypted_entry_count: i32
+         * - encrypted_offset(u32)[]
+         */
+
+        // we just keep reading until get the end of the entries
         loop {
             let entry = WzDirectoryEntry::read_pkg2_entry(
                 reader,
@@ -226,30 +233,40 @@ impl WzDirectory {
         &self,
         reader: &WzSliceReader,
     ) -> Result<Vec<WzDirectoryEntry>, Error> {
-        let entry_count_calculator = self.profile.offset_version.get_entry_count_calculator();
-
         let encrypted_entry_count = reader.read_wz_int64()?;
-        let entry_count: usize =
-            entry_count_calculator(&reader.header, self.hash, encrypted_entry_count)?;
 
-        if !(0..=1_000_000).contains(&entry_count) {
-            return Err(Error::InvalidEntryCount);
-        }
+        let mut wz_dir_entries: Vec<WzDirectoryEntry> = vec![];
+        let mut current_total_size = 0;
 
-        let mut wz_dir_entries: Vec<WzDirectoryEntry> = Vec::with_capacity(entry_count);
+        /* pkg2_v64 entry structure:
+         * - encrypted_entry_count: i64
+         * - WzDirectoryEntry[]
+         * - encrypted_offset(u32)[]
+         */
+        loop {
+            let entry = WzDirectoryEntry::read_pkg2_64_entry(
+                reader,
+                encrypted_entry_count,
+                wz_dir_entries.is_empty(),
+            )?;
 
-        for i in 0..entry_count {
-            let entry =
-                WzDirectoryEntry::read_pkg2_entry(reader, encrypted_entry_count as i32, i == 0)?;
+            /* 4 for the encrypted_offset */
+            current_total_size += entry.size + 4;
 
             match entry.dir_type {
-                WzDirectoryType::WzDirectory | WzDirectoryType::WzImage => {
-                    wz_dir_entries.push(entry);
+                // im using the UnknownType to indicate the end of the entries
+                WzDirectoryType::UnknownType => {
+                    break;
                 }
                 WzDirectoryType::NewUnknownType(dir_byte) => {
                     return Err(Error::UnknownWzDirectoryType(dir_byte, reader.pos.get()));
                 }
-                _ => return Err(Error::InvalidWzVersion),
+                _ => {
+                    wz_dir_entries.push(entry);
+                }
+            }
+            if reader.pos.get() + current_total_size >= self.block_size {
+                break;
             }
         }
 
@@ -379,11 +396,7 @@ impl WzDirectoryEntry {
         match entry.dir_type {
             WzDirectoryType::WzDirectory | WzDirectoryType::WzImage => {
                 if use_pkg2_dir_read && reader.pkg2_keys.read().unwrap().is_pkg2() {
-                    if reader.header.is_pkg2_64() {
-                        entry.name = reader.read_wz_string_pkg2_u64_dir_meta()?;
-                    } else {
-                        entry.name = reader.read_wz_string_pkg2_dir_meta()?;
-                    }
+                    entry.name = reader.read_wz_string_pkg2_dir_meta()?;
                 } else {
                     entry.name = reader.read_wz_string_meta()?;
                 }
@@ -399,6 +412,35 @@ impl WzDirectoryEntry {
                     entry.dir_type = WzDirectoryType::UnknownType;
                 }
                 return Ok(entry);
+            }
+            _ => {
+                return Err(Error::InvalidWzVersion);
+            }
+        }
+
+        entry.size = reader.read_wz_int()? as usize;
+        entry._checksum = reader.read_wz_int()?;
+
+        Ok(entry)
+    }
+
+    pub fn read_pkg2_64_entry(
+        reader: &WzSliceReader,
+        _encrypted_entry_count: i64,
+        use_pkg2_dir_read: bool,
+    ) -> Result<Self, Error> {
+        let mut entry = WzDirectoryEntry {
+            dir_type: reader.read_u8()?.into(),
+            ..Default::default()
+        };
+
+        match entry.dir_type {
+            WzDirectoryType::WzDirectory | WzDirectoryType::WzImage => {
+                if use_pkg2_dir_read && reader.pkg2_keys.read().unwrap().is_pkg2() {
+                    entry.name = reader.read_wz_string_pkg2_u64_dir_meta()?;
+                } else {
+                    entry.name = reader.read_wz_string_meta()?;
+                }
             }
             _ => {
                 return Err(Error::InvalidWzVersion);

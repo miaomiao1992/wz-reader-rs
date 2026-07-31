@@ -146,7 +146,7 @@ pub fn read_wz_offset_pkg2_v3(header: &WzHeader, meta: &WzOffsetMeta) -> Result<
 }
 
 /// calculate the offset of the specific data like wz image/directory in wz file,
-/// only work in pkg2 with version 1202
+/// only work in pkg2 with version 1202-1203
 #[inline]
 pub fn read_wz_offset_pkg2_64_v1(header: &WzHeader, meta: &WzOffsetMeta) -> Result<usize> {
     let offset = meta.offset as u32;

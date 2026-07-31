@@ -1,7 +1,7 @@
 use crate::util::string_decryptor::pkg2_decryptor::{get_kmst1199_key, get_kmst1202_key};
 use crate::{
     directory, reader, util, util::profile, util::string_decryptor, util::version::PKGVersion,
-    wz_image, SharedWzStringDecryptor, WzDirectory, WzNodeArc, WzNodeArcVec, WzNodeCast,
+    wz_image, Reader, SharedWzStringDecryptor, WzDirectory, WzNodeArc, WzNodeArcVec, WzNodeCast,
     WzObjectType, WzReader,
 };
 use memmap2::Mmap;
@@ -137,7 +137,7 @@ impl WzFile {
         parent: &WzNodeArc,
         patch_version: Option<i32>,
     ) -> Result<WzNodeArcVec, Error> {
-        match self.reader.create_header().ident {
+        match self.reader.header.ident {
             PKGVersion::V1 => self.parse_pkg1(parent, patch_version),
             PKGVersion::V2 => self.parse_pkg2(parent),
             _ => Err(Error::UnknownPkgVersion),

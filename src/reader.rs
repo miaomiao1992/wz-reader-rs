@@ -24,6 +24,8 @@ pub enum Error {
     WrongParsingMethod(WzStringType),
     #[error("Unable to read WzHeader from buffer")]
     UnableToReadWzHeader,
+    #[error("Invalid string length: {0} at pos {1}")]
+    InvalidStringLength(usize, usize),
     #[error("Out of bounds, expected end to be less than {0}, but got {1}")]
     OutOfBounds(usize, usize),
 }
@@ -522,8 +524,12 @@ impl<'a> WzSliceReader<'a> {
         if len >= 0 {
             Ok(WzStringMeta::empty())
         } else {
-            let length = (-len) as usize * 2;
-            let meta = WzStringMeta::new_pkg2_dir(self.pos.get(), length as u32);
+            let length = (len as i32).unsigned_abs() as usize * 2;
+            let pos = self.pos.get();
+            if pos + length > self.get_size() {
+                return Err(Error::InvalidStringLength(length, pos));
+            }
+            let meta = WzStringMeta::new_pkg2_dir(pos, length as u32);
             self.skip(length);
             Ok(meta)
         }
@@ -534,8 +540,12 @@ impl<'a> WzSliceReader<'a> {
         if len >= 0 {
             Ok(WzStringMeta::empty())
         } else {
-            let length = (-len) as usize * 2;
-            let meta = WzStringMeta::new_pkg2_dir(self.pos.get(), length as u32);
+            let length = (len as i32).unsigned_abs() as usize * 2;
+            let pos = self.pos.get();
+            if pos + length > self.get_size() {
+                return Err(Error::InvalidStringLength(length, pos));
+            }
+            let meta = WzStringMeta::new_pkg2_dir(pos, length as u32);
             self.skip(length);
             Ok(meta)
         }

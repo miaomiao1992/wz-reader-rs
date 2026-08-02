@@ -526,7 +526,7 @@ impl<'a> WzSliceReader<'a> {
         } else {
             let length = (len as i32).unsigned_abs() as usize * 2;
             let pos = self.pos.get();
-            if pos + length > self.get_size() {
+            if pos.saturating_add(length) > self.get_size() {
                 return Err(Error::InvalidStringLength(length, pos));
             }
             let meta = WzStringMeta::new_pkg2_dir(pos, length as u32);
@@ -542,7 +542,7 @@ impl<'a> WzSliceReader<'a> {
         } else {
             let length = (len as i32).unsigned_abs() as usize * 2;
             let pos = self.pos.get();
-            if pos + length > self.get_size() {
+            if pos.saturating_add(length) > self.get_size() {
                 return Err(Error::InvalidStringLength(length, pos));
             }
             let meta = WzStringMeta::new_pkg2_dir(pos, length as u32);

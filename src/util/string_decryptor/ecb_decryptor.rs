@@ -154,6 +154,16 @@ impl Decryptor for EcbDecryptor {
 
         Ok(())
     }
+
+    fn set_key_material(&mut self, _hash1: u64, _hash_version: u64, _enc_type: DecrypterType) {
+        unimplemented!("ECB decryptor does not support key material");
+    }
+    fn apply_file_position(&mut self, _file_position: u64) {
+        unimplemented!("ECB decryptor does not support file position");
+    }
+    fn decrypt_slice_with_offset(&self, data: &mut [u8], _offset: u64) {
+        self.decrypt_slice(data);
+    }
 }
 
 #[cfg(test)]

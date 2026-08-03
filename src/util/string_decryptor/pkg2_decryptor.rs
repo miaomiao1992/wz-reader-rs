@@ -34,19 +34,19 @@ impl Pkg2Decryptor {
     fn calculate_keys(&mut self, key: u64) {
         self.iv = key;
 
-        let k = key.to_le_bytes();
+        let k = gen_pkg2_keys(key);
 
         self.keys[0] = k[0];
         self.keys[1] = k[1];
 
-        self.keys[2] = k[1];
-        self.keys[3] = k[2];
+        self.keys[2] = k[2];
+        self.keys[3] = k[3];
 
-        self.keys[4] = k[2];
-        self.keys[5] = k[3];
+        self.keys[4] = k[4];
+        self.keys[5] = k[5];
 
-        self.keys[6] = k[3];
-        self.keys[7] = k[4];
+        self.keys[6] = k[6];
+        self.keys[7] = k[7];
     }
 }
 
@@ -112,9 +112,26 @@ impl Decryptor for Pkg2Decryptor {
         }
     }
 
+    fn decrypt_slice_with_offset(&self, data: &mut [u8], offset: u64) {
+        if self.enc_type == DecrypterType::KMST1204 {
+            let keys = gen_pkg2_keys(get_kmst1204_key(self.hash1, self.hash_version, offset));
+            for (i, item) in data.iter_mut().enumerate() {
+                *item ^= keys[i % 8];
+            }
+            return;
+        }
+        self.decrypt_slice(data);
+    }
+
     fn ensure_key_size(&mut self, _size: usize) -> Result<(), String> {
         Ok(())
     }
+}
+
+pub fn gen_pkg2_keys(key: u64) -> [u8; 8] {
+    let k = key.to_le_bytes();
+
+    [k[0], k[1], k[1], k[2], k[2], k[3], k[3], k[4]]
 }
 
 pub fn get_kmst1199_key(hash1: u32, hash_version: u32) -> u32 {

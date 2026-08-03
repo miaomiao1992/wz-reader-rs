@@ -57,9 +57,9 @@ impl WzProfile {
         matches!(self.name, WzProfileVersion::Pkg2V1204)
     }
 
-    /// Whether every directory entry name uses the PKG2 V2 (u16 length) encoding.
+    /// Whether every directory entry name uses the PKG2 V2 or only the first one.
     pub fn all_names_use_pkg2_v2(&self) -> bool {
-        self.name == WzProfileVersion::Pkg2V1204
+        matches!(self.name, WzProfileVersion::Pkg2V1204)
     }
 
     pub fn matches_header(&self, header: &WzHeader) -> bool {

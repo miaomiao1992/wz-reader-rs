@@ -21,17 +21,14 @@ pub trait Decryptor: std::fmt::Debug + Send + Sync {
     fn at(&mut self, index: usize) -> &u8;
     fn try_at(&self, index: usize) -> Option<&u8>;
     fn decrypt_slice(&self, data: &mut [u8]);
+    fn decrypt_slice_with_offset(&self, data: &mut [u8], offset: u64);
     fn ensure_key_size(&mut self, size: usize) -> Result<(), String>;
     fn get_enc_type(&self) -> DecrypterType;
 
     /// Optional hash material for dynamic PKG2 keys (KMST1199/1202/1204).
-    fn set_key_material(&mut self, _hash1: u64, _hash_version: u64, enc_type: DecrypterType) {
-        // Default: ignore hash1 and rely on set_iv callers.
-        let _ = enc_type;
-    }
-
+    fn set_key_material(&mut self, _hash1: u64, _hash_version: u64, enc_type: DecrypterType);
     /// KMST1204: recompute the string key for a file position.
-    fn apply_file_position(&mut self, _file_position: u64) {}
+    fn apply_file_position(&mut self, _file_position: u64);
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

@@ -966,18 +966,12 @@ pub fn get_pkg2_decrypt_slice(
 ) -> Result<Vec<u8>> {
     let mut original = buf.to_vec();
 
-    {
-        println!("get_pkg2_decrypt_slice");
-        let mut write = keys.write().unwrap();
-        if write.get_enc_type() == crate::util::string_decryptor::DecrypterType::KMST1204 {
-            // C# PreReader stream is based at dirStart; ApplyState uses that relative position.
-            let length_prefix_pos = data_offset.saturating_sub(2);
-            let relative_pos = length_prefix_pos.saturating_sub(header_size) as u64;
-            write.apply_file_position(relative_pos);
-        }
-        write.decrypt_slice(&mut original);
-    }
-    println!("get_pkg2_decrypt_slice done");
+    let length_prefix_pos = data_offset.saturating_sub(2);
+    let relative_pos = length_prefix_pos.saturating_sub(header_size) as u64;
+
+    keys.read()
+        .unwrap()
+        .decrypt_slice_with_offset(&mut original, relative_pos);
 
     Ok(original)
 }

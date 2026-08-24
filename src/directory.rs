@@ -2,7 +2,7 @@ use crate::{
     property::WzStringMeta,
     reader,
     util::{
-        offset::{calc_pkg2_64_v1_length, WzOffsetMeta},
+        offset::{calc_pkg2_64_v1_length, calc_pkg2_64_v2_length, WzOffsetMeta, WzOffsetVersion},
         profile::WzProfile,
         version::PKGVersion,
     },
@@ -242,6 +242,7 @@ impl WzDirectory {
 
         let all_names_use_v2 = self.profile.all_names_use_pkg2_v2();
         let encrypt_entry_data = self.profile.encrypts_entry_data();
+        let names_follow_entry_data = self.profile.names_follow_entry_data();
 
         let mut wz_dir_entries: Vec<WzDirectoryEntry> = vec![];
         let mut current_total_size = 0;
@@ -259,7 +260,9 @@ impl WzDirectory {
                 reader,
                 wz_dir_entries.is_empty() || all_names_use_v2,
                 encrypt_entry_data,
+                names_follow_entry_data,
                 self.hash,
+                self.profile.offset_version,
             )?;
 
             /* 4 for the encrypted_offset */
@@ -330,7 +333,10 @@ impl WzDirectory {
 
             entry.offset = offset_calculator(&reader.header, &meta)?;
 
-            if entry.verify(&reader).is_err() {
+            if entry
+                .verify(&reader, self.hash, self.profile.offset_version)
+                .is_err()
+            {
                 return Err(Error::InvalidWzVersion);
             }
         }
@@ -440,7 +446,9 @@ impl WzDirectoryEntry {
         reader: &WzSliceReader,
         use_pkg2_dir_read: bool,
         encrypt_entry_data: bool,
+        name_follows_entry_data: bool,
         hash: u64,
+        offset_version: WzOffsetVersion,
     ) -> Result<Self, Error> {
         let mut entry = WzDirectoryEntry {
             dir_type: reader.read_u8()?.into(),
@@ -449,10 +457,12 @@ impl WzDirectoryEntry {
 
         match entry.dir_type {
             WzDirectoryType::WzDirectory | WzDirectoryType::WzImage => {
-                if use_pkg2_dir_read && reader.pkg2_keys.read().unwrap().is_pkg2() {
-                    entry.name = reader.read_wz_string_pkg2_u64_dir_meta()?;
-                } else {
-                    entry.name = reader.read_wz_string_meta()?;
+                if !name_follows_entry_data {
+                    if use_pkg2_dir_read && reader.pkg2_keys.read().unwrap().is_pkg2() {
+                        entry.name = reader.read_wz_string_pkg2_u64_dir_meta()?;
+                    } else {
+                        entry.name = reader.read_wz_string_meta()?;
+                    }
                 }
             }
             _ => {
@@ -466,8 +476,13 @@ impl WzDirectoryEntry {
         let mut checksum = reader.read_wz_int()?;
 
         if encrypt_entry_data {
-            size = calc_pkg2_64_v1_length(&reader.header, hash, size_pos, size);
-            checksum = calc_pkg2_64_v1_length(&reader.header, hash, checksum_pos, checksum);
+            let decrypt = match offset_version {
+                WzOffsetVersion::Pkg2_64V1 => calc_pkg2_64_v1_length,
+                WzOffsetVersion::Pkg2_64V2 => calc_pkg2_64_v2_length,
+                _ => return Err(Error::InvalidWzVersion),
+            };
+            size = decrypt(&reader.header, hash, size_pos, size);
+            checksum = decrypt(&reader.header, hash, checksum_pos, checksum);
         }
 
         if size < 0 {
@@ -477,10 +492,23 @@ impl WzDirectoryEntry {
         entry.size = size as usize;
         entry._checksum = checksum;
 
+        if name_follows_entry_data {
+            if use_pkg2_dir_read && reader.pkg2_keys.read().unwrap().is_pkg2() {
+                entry.name = reader.read_wz_string_pkg2_u64_dir_meta()?;
+            } else {
+                entry.name = reader.read_wz_string_meta()?;
+            }
+        }
+
         Ok(entry)
     }
 
-    pub fn verify(&self, reader: &WzSliceReader) -> Result<(), Error> {
+    pub fn verify(
+        &self,
+        reader: &WzSliceReader,
+        hash: u64,
+        offset_version: WzOffsetVersion,
+    ) -> Result<(), Error> {
         if !reader.is_valid_pos(self.offset + self.size) {
             return Err(Error::InvalidWzVersion);
         }

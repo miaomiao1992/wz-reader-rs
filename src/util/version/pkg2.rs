@@ -1,4 +1,4 @@
-use crate::util::string_decryptor::pkg2_decryptor::mix_kmst1199;
+use crate::util::string_decryptor::pkg2_decryptor::{mix_kmst1199, mix_kmst1205};
 
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
@@ -22,12 +22,13 @@ pub enum Pkg2VersionGen {
     V4,
     V5,
     V6, // 64-bit hash
+    V7, // KMST1205 64-bit hash
     #[default]
     Unknown,
 }
 impl Pkg2VersionGen {
     pub fn is_u64_hash(&self) -> bool {
-        matches!(self, Pkg2VersionGen::V6)
+        matches!(self, Pkg2VersionGen::V6 | Pkg2VersionGen::V7)
     }
 
     pub fn get_generator(&self, hash1: u64, hash2: u64) -> Box<dyn VersionGenerator<u32>> {
@@ -46,6 +47,7 @@ impl Pkg2VersionGen {
     pub fn get_generator_u64(&self, hash1: u64, hash2: u64) -> Box<dyn VersionGenerator<u64>> {
         match self {
             Pkg2VersionGen::V6 => Box::new(Pkg2VersionGenV6::new(hash1, hash2)),
+            Pkg2VersionGen::V7 => Box::new(Pkg2VersionGenV7::new(hash1, hash2)),
             _ => unreachable!(),
         }
     }
@@ -290,6 +292,48 @@ impl VersionGenerator<u64> for Pkg2VersionGenV6 {
     }
 }
 
+pub struct Pkg2VersionGenV7 {
+    hash1: u64,
+    hash2: u64,
+}
+
+impl Pkg2VersionGenV7 {
+    const HASH_VERSION: u64 = 0x8F08_109B_6A61_D954;
+
+    pub fn new(hash1: u64, hash2: u64) -> Self {
+        Self { hash1, hash2 }
+    }
+
+    #[inline]
+    pub fn verify_hash(hash1: u64, hash2: u64, target_hash: u64) -> bool {
+        let mixed = mix_kmst1205(target_hash, hash1);
+        let t = mixed ^ 0x84CA_A73B_2BB7_0682;
+        let v43 = 0xBF58_476D_1CE4_E5B9_u64
+            .wrapping_mul(t ^ (t >> 30))
+            .rotate_right(27);
+        let hx = 0x94D0_49BB_1331_11EB_u64.wrapping_mul(v43 ^ (v43 >> 27));
+        (hx ^ (hx >> 31)) == hash2
+    }
+
+    fn calc_hash(&self) -> Vec<u64> {
+        if Self::verify_hash(self.hash1, self.hash2, Self::HASH_VERSION) {
+            vec![Self::HASH_VERSION]
+        } else {
+            vec![]
+        }
+    }
+}
+
+impl VersionGenerator<u64> for Pkg2VersionGenV7 {
+    fn get_iter(self: Box<Self>) -> Box<dyn Iterator<Item = u64>> {
+        Box::new(self.calc_hash().into_iter())
+    }
+
+    fn get_verifier(&self) -> Box<dyn Fn(u64, u64, u64) -> bool> {
+        Box::new(Self::verify_hash)
+    }
+}
+
 #[derive(Debug)]
 pub struct HashGenInfo<'a, F: Fn(u32, u32, u32) -> bool> {
     hash1: u32,
@@ -518,6 +562,20 @@ mod tests {
         let results: Vec<u64> = version_gen.calc_hash();
         assert_eq!(results.len(), 1);
         assert!(Pkg2VersionGenV6::verify_hash(hash1, hash2, results[0]));
+    }
+
+    #[test]
+    fn test_pkg2_version_gen_v7() {
+        let hash1 = 0x0123_4567_89AB_CDEF;
+        let hash2 = 0xADB8_0ADC_B231_3266;
+        let version_gen = Pkg2VersionGenV7::new(hash1, hash2);
+        let results = version_gen.calc_hash();
+
+        assert_eq!(results, vec![0x8F08_109B_6A61_D954]);
+        assert!(Pkg2VersionGenV7::verify_hash(hash1, hash2, results[0]));
+        assert!(Pkg2VersionGenV7::new(hash1, hash2 ^ 1)
+            .calc_hash()
+            .is_empty());
     }
 
     #[test]

@@ -6,7 +6,7 @@ pub struct Pkg2Decryptor {
     iv: u64,
     enc_type: DecrypterType,
     keys: [u8; 8],
-    /// KMST1204: position-dependent key material
+    /// KMST1204/1205: position-dependent key material
     hash1: u64,
     hash_version: u64,
 }
@@ -57,7 +57,7 @@ impl Decryptor for Pkg2Decryptor {
 
     fn set_iv(&mut self, key: u64, enc_type: DecrypterType) {
         self.enc_type = enc_type;
-        if enc_type != DecrypterType::KMST1204 {
+        if !matches!(enc_type, DecrypterType::KMST1204 | DecrypterType::KMST1205) {
             self.calculate_keys(key);
         }
     }
@@ -66,7 +66,7 @@ impl Decryptor for Pkg2Decryptor {
         self.enc_type = enc_type;
         self.hash1 = hash1;
         self.hash_version = hash_version;
-        if enc_type == DecrypterType::KMST1204 {
+        if matches!(enc_type, DecrypterType::KMST1204 | DecrypterType::KMST1205) {
             self.apply_file_position(0);
         } else if enc_type == DecrypterType::KMST1202 {
             self.calculate_keys(get_kmst1202_key(hash1, hash_version));
@@ -78,14 +78,19 @@ impl Decryptor for Pkg2Decryptor {
     }
 
     fn apply_file_position(&mut self, file_position: u64) {
-        if self.enc_type != DecrypterType::KMST1204 {
-            return;
+        match self.enc_type {
+            DecrypterType::KMST1204 => self.calculate_keys(get_kmst1204_key(
+                self.hash1,
+                self.hash_version,
+                file_position,
+            )),
+            DecrypterType::KMST1205 => self.calculate_keys(get_kmst1205_key(
+                self.hash1,
+                self.hash_version,
+                file_position,
+            )),
+            _ => {}
         }
-        self.calculate_keys(get_kmst1204_key(
-            self.hash1,
-            self.hash_version,
-            file_position,
-        ));
     }
 
     fn get_enc_type(&self) -> DecrypterType {
@@ -113,14 +118,18 @@ impl Decryptor for Pkg2Decryptor {
     }
 
     fn decrypt_slice_with_offset(&self, data: &mut [u8], offset: u64) {
-        if self.enc_type == DecrypterType::KMST1204 {
-            let keys = gen_pkg2_keys(get_kmst1204_key(self.hash1, self.hash_version, offset));
-            for (i, item) in data.iter_mut().enumerate() {
-                *item ^= keys[i % 8];
+        let keys = match self.enc_type {
+            DecrypterType::KMST1204 => {
+                gen_pkg2_keys(get_kmst1204_key(self.hash1, self.hash_version, offset))
             }
-            return;
+            DecrypterType::KMST1205 => {
+                gen_pkg2_keys(get_kmst1205_key(self.hash1, self.hash_version, offset))
+            }
+            _ => self.keys,
+        };
+        for (i, item) in data.iter_mut().enumerate() {
+            *item ^= keys[i % 8];
         }
-        self.decrypt_slice(data);
     }
 
     fn ensure_key_size(&mut self, _size: usize) -> Result<(), String> {
@@ -150,6 +159,53 @@ pub fn get_kmst1204_key(hash1: u64, hash_version: u64, file_position: u64) -> u6
         ^ hash_version
         ^ 0x21810F65FEC32BDC_u64
         ^ 0x9E3779B97F4A7C15_u64.wrapping_mul(file_position)
+}
+
+/// Core KMST1205 64-bit mixer shared by hash, offset, and string-key calculations.
+#[inline]
+pub(crate) fn mix_kmst1205(hash_version: u64, hash1: u64) -> u64 {
+    let v2 = (hash1 ^ 0x81B4_A012_24AA_B10C).rotate_left(31);
+
+    let t1 = 0xFF51_AFD7_ED55_8CCD_u64.wrapping_mul(v2 ^ (v2 >> 33));
+    let mut v3 = 0xC4CE_B9FE_1A85_EC53_u64.wrapping_mul(t1 ^ (t1 >> 29));
+    v3 ^= v3 >> 32;
+
+    let a = hash_version.wrapping_sub(0x2E4A_B5CD_2E6D_12FD);
+    let t2 = a ^ 0x84CA_A73B_2BB7_0682;
+    let v4 = 0xBF58_476D_1CE4_E5B9_u64
+        .wrapping_mul(t2 ^ (t2 >> 30))
+        .rotate_right(27);
+    let v5x = 0x94D0_49BB_1331_11EB_u64.wrapping_mul(v4 ^ (v4 >> 27));
+    let v5 = v5x ^ (v5x >> 31);
+    let v6 = v5.wrapping_add(0x510E_527F_ADE6_82D1);
+    let v7 = v5.rotate_left(17);
+
+    let tmp = v3.wrapping_add(v6);
+    let v8 =
+        0x9FB2_1C65_1E98_DF25_u64.wrapping_mul(tmp ^ tmp.rotate_right(25) ^ tmp.rotate_right(47));
+    let f = v3 ^ v8 ^ v7 ^ (v8 >> 28);
+    let fx = 0x94D0_49BB_1331_11EB_u64.wrapping_mul(f ^ (f >> 29));
+    fx ^ (fx >> 32)
+}
+
+/// KMST1205 position-dependent directory string key.
+#[inline]
+pub fn get_kmst1205_key(hash1: u64, hash_version: u64, file_position: u64) -> u64 {
+    let mixed = mix_kmst1205(hash_version, hash1);
+    let mul1 = 0xD1B5_4A32_D192_ED03_u64.wrapping_mul(file_position);
+    let v43 = mul1 ^ mul1.rotate_left(32);
+
+    let t1 = v43 ^ mixed ^ 0x6A09_E667_F3BC_C908;
+    let v44 = 0x2545_F491_4F6C_DD1D_u64.wrapping_mul(t1 ^ t1.rotate_left(23) ^ t1.rotate_left(41));
+
+    let sum1 = v43.wrapping_add(mixed).wrapping_add(0x510E_527F_ADE6_82D1);
+    let v45 = 0x9FB2_1C65_1E98_DF25_u64
+        .wrapping_mul(sum1 ^ sum1.rotate_right(25) ^ sum1.rotate_right(47));
+
+    let t2 = 0xBF58_476D_1CE4_E5B9_u64.wrapping_mul(v44 ^ (v44 >> 32) as u32 as u64);
+    let inner = v45 ^ t2 ^ (t2 >> 29) ^ (v45 >> 28);
+    let v46 = inner.rotate_left((v43 & 0x3F) as u32);
+    v46 ^ (v46 >> 29)
 }
 
 #[inline(always)]
@@ -189,5 +245,21 @@ mod test {
         decryptor.decrypt_slice(&mut decrypted);
         decryptor.decrypt_slice(&mut decrypted);
         assert_eq!(decrypted, b"Hello, world!");
+    }
+
+    #[test]
+    fn test_kmst1205_mix_and_position_keys() {
+        let hash1 = 0x0123_4567_89AB_CDEF;
+        let hash_version = 0x8F08_109B_6A61_D954;
+
+        assert_eq!(mix_kmst1205(hash_version, hash1), 0x5D5B_C539_CFB6_833A);
+        assert_eq!(
+            get_kmst1205_key(hash1, hash_version, 0),
+            0x3EDE_499D_1F39_EBF1
+        );
+        assert_eq!(
+            get_kmst1205_key(hash1, hash_version, 123),
+            0x01AA_2681_3C6C_358D
+        );
     }
 }

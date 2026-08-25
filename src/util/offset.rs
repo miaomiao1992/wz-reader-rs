@@ -1,4 +1,4 @@
-use crate::{directory, reader::Error, WzHeader};
+use crate::{directory, reader::Error, util::version::pkg2_kmst1205, WzHeader};
 
 type Result<T> = std::result::Result<T, Error>;
 type EntryCountResult<T> = std::result::Result<T, directory::Error>;
@@ -203,18 +203,11 @@ pub fn decrypt_pkg2_entry_count_64_v1(
 
 #[inline]
 fn calc_pkg2_64_v2_shared_key(header: &WzHeader, hash: u64, file_pos: u32) -> u32 {
-    use crate::util::string_decryptor::pkg2_decryptor::mix_kmst1205;
-
-    let mixed = mix_kmst1205(hash, header.hash1);
-    let folded = mixed as u32 ^ (mixed >> 32) as u32;
-    let relative_pos = file_pos.wrapping_sub(header.fstart as u32);
-    let inner = folded
-        .wrapping_add(0x2545_F491_u32.wrapping_mul(relative_pos ^ (relative_pos >> 15)))
-        .wrapping_add(hash as u32 ^ header.hash1_u32());
-    let rolled = inner.rotate_left((folded ^ header.hash1_u32()) & 0x1F);
-    let v6lo = 0x85EB_CA77_u32.wrapping_mul(rolled);
-    let t = (v6lo ^ (v6lo >> 13)).wrapping_sub(0x3D4D_51C3_u32.wrapping_mul(folded));
-    t ^ t.rotate_left(16)
+    pkg2_kmst1205::compute_entry_field_key(
+        header.hash1,
+        hash,
+        file_pos.wrapping_sub(header.fstart as u32),
+    )
 }
 
 /// KMST1205 encrypts directory entry size/checksum with its new shared key.
@@ -231,45 +224,13 @@ pub fn calc_pkg2_64_v2_length(
 /// Calculate an image/directory offset for KMST1205.
 #[inline]
 pub fn read_wz_offset_pkg2_64_v2(header: &WzHeader, meta: &WzOffsetMeta) -> Result<usize> {
-    use crate::util::string_decryptor::pkg2_decryptor::mix_kmst1205;
-
-    let mixed = mix_kmst1205(meta.hash, header.hash1) as u32;
-    let hash1 = header.hash1_u32();
-    let hash_version = meta.hash as u32;
-    let file_pos = meta.offset as u32;
-    let header_size = header.fstart as u32;
-
-    let part1 = 0xC2B2_AE3D_u32.wrapping_mul(mixed);
-    let part2 = 0x85EB_CA77_u32.wrapping_mul(hash1);
-    let part3 = (hash1 ^ hash_version)
-        .wrapping_add(mixed ^ 0x2545_F491)
-        .wrapping_mul(!file_pos.wrapping_sub(header_size));
-    let key = part1 ^ part2 ^ part3.wrapping_add(0x2545_F491);
-    let rotation = (mixed ^ hash1 ^ hash_version) & 0x1F;
-
-    let offset = (!meta.encrypted_offset ^ key.rotate_left(rotation)).wrapping_add(header_size);
-    Ok(offset as usize)
-}
-
-#[inline]
-fn mix_pkg2_64_v2_entry_count(hash_version: u64, hash1: u64) -> u64 {
-    let t1 = hash1 ^ 0x84CA_A73B_2BB7_0682;
-    let v3 = 0xBF58_476D_1CE4_E5B9_u64
-        .wrapping_mul(t1 ^ (t1 >> 30))
-        .rotate_right(27);
-
-    let sum1 = hash_version.wrapping_add(0x510E_527F_ADE6_82D1);
-    let v4 = 0x9FB2_1C65_1E98_DF25_u64
-        .wrapping_mul(sum1 ^ sum1.rotate_right(25) ^ sum1.rotate_right(47));
-    let tmp2 = 0x94D0_49BB_1331_11EB_u64.wrapping_mul(v3 ^ (v3 >> 27));
-    let v5 = v4 ^ ((v4 ^ (tmp2 >> 3)) >> 28);
-
-    let t4 = hash_version.wrapping_add(hash1) ^ 0x6A09_E667_F3BC_C908;
-    let v6 = 0x2545_F491_4F6C_DD1D_u64.wrapping_mul(t4 ^ t4.rotate_left(23) ^ t4.rotate_left(41));
-    let tmp3 = 0xBF58_476D_1CE4_E5B9_u64.wrapping_mul(v6 ^ (v6 >> 32) as u32 as u64);
-    let x = tmp2 ^ v5;
-    let v7 = (tmp3 ^ (tmp3 >> 29)) ^ x.wrapping_add(x.rotate_left(23));
-    v7 ^ (v7 >> 31)
+    Ok(pkg2_kmst1205::compute_image_offset(
+        header.hash1,
+        meta.hash,
+        header.fstart as u32,
+        meta.offset as u32,
+        meta.encrypted_offset,
+    ) as usize)
 }
 
 #[inline]
@@ -278,8 +239,9 @@ pub fn decrypt_pkg2_entry_count_64_v2(
     hash: u64,
     encrypted_entry_count: i64,
 ) -> EntryCountResult<usize> {
-    let dir_count =
-        (encrypted_entry_count as u64 ^ mix_pkg2_64_v2_entry_count(hash, header.hash1)) >> 16;
+    let dir_count = (encrypted_entry_count as u64
+        ^ pkg2_kmst1205::compute_directory_count_key(header.hash1, hash))
+        >> 16;
     if dir_count > i32::MAX as u64 {
         return Err(directory::Error::InvalidEntryCount);
     }

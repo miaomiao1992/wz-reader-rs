@@ -1,4 +1,5 @@
-use crate::util::string_decryptor::pkg2_decryptor::{mix_kmst1199, mix_kmst1205};
+use crate::util::string_decryptor::pkg2_decryptor::mix_kmst1199;
+use crate::util::version::pkg2_kmst1205;
 
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
@@ -298,29 +299,20 @@ pub struct Pkg2VersionGenV7 {
 }
 
 impl Pkg2VersionGenV7 {
-    const HASH_VERSION: u64 = 0x8F08_109B_6A61_D954;
-
     pub fn new(hash1: u64, hash2: u64) -> Self {
         Self { hash1, hash2 }
     }
 
     #[inline]
     pub fn verify_hash(hash1: u64, hash2: u64, target_hash: u64) -> bool {
-        let mixed = mix_kmst1205(target_hash, hash1);
-        let t = mixed ^ 0x84CA_A73B_2BB7_0682;
-        let v43 = 0xBF58_476D_1CE4_E5B9_u64
-            .wrapping_mul(t ^ (t >> 30))
-            .rotate_right(27);
-        let hx = 0x94D0_49BB_1331_11EB_u64.wrapping_mul(v43 ^ (v43 >> 27));
-        (hx ^ (hx >> 31)) == hash2
+        pkg2_kmst1205::compute_hash2(hash1, target_hash) == hash2
     }
 
     fn calc_hash(&self) -> Vec<u64> {
-        if Self::verify_hash(self.hash1, self.hash2, Self::HASH_VERSION) {
-            vec![Self::HASH_VERSION]
-        } else {
-            vec![]
-        }
+        pkg2_kmst1205::kmst1205_hash_version_candidates()
+            .find(|&hash_version| Self::verify_hash(self.hash1, self.hash2, hash_version))
+            .into_iter()
+            .collect()
     }
 }
 
@@ -567,15 +559,22 @@ mod tests {
     #[test]
     fn test_pkg2_version_gen_v7() {
         let hash1 = 0x0123_4567_89AB_CDEF;
-        let hash2 = 0xADB8_0ADC_B231_3266;
+        let hash_version = pkg2_kmst1205::KMST1205_HASH_VERSION;
+        let hash2 = pkg2_kmst1205::compute_hash2(hash1, hash_version);
         let version_gen = Pkg2VersionGenV7::new(hash1, hash2);
         let results = version_gen.calc_hash();
 
-        assert_eq!(results, vec![0x8F08_109B_6A61_D954]);
+        assert_eq!(results, vec![hash_version]);
         assert!(Pkg2VersionGenV7::verify_hash(hash1, hash2, results[0]));
         assert!(Pkg2VersionGenV7::new(hash1, hash2 ^ 1)
             .calc_hash()
             .is_empty());
+
+        // The version string hashes to the same seed, so it is found first.
+        assert_eq!(
+            pkg2_kmst1205::compute_pkg2_hash_version(pkg2_kmst1205::KMST1205_VERSION_STRINGS[0]),
+            hash_version
+        );
     }
 
     #[test]

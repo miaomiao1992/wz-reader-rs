@@ -20,6 +20,13 @@ pub enum WzProfileVersion {
     Pkg2V1196,
 }
 
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub enum Pkg2EntryNamePosition {
+    #[default]
+    BeforeData,
+    AfterData,
+}
+
 impl std::fmt::Display for WzProfileVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
@@ -61,7 +68,7 @@ impl WzProfile {
         )
     }
 
-    /// Whether every directory entry name uses the PKG2 V2 or only the first one.
+    /// Whether every directory entry name uses the PKG2 V2 key, or only the first one.
     pub fn all_names_use_pkg2_v2(&self) -> bool {
         matches!(
             self.name,
@@ -69,9 +76,12 @@ impl WzProfile {
         )
     }
 
-    /// KMST1205 stores each entry name after its size and checksum.
-    pub fn names_follow_entry_data(&self) -> bool {
-        matches!(self.name, WzProfileVersion::Pkg2V1205)
+    pub fn entry_name_position(&self) -> Pkg2EntryNamePosition {
+        if matches!(self.name, WzProfileVersion::Pkg2V1205) {
+            Pkg2EntryNamePosition::AfterData
+        } else {
+            Pkg2EntryNamePosition::BeforeData
+        }
     }
 
     pub fn matches_header(&self, header: &WzHeader) -> bool {

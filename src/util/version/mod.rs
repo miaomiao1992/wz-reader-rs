@@ -1,5 +1,6 @@
 pub mod pkg1;
 pub mod pkg2;
+pub mod pkg2_kmst1205;
 
 use crate::util::maple_crypto_constants::{WZ_GMSIV, WZ_MSEAIV};
 use crate::util::string_decryptor::{ecb_decryptor::EcbDecryptor, Decryptor};

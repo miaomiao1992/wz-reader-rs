@@ -3,7 +3,7 @@ use crate::{
     reader,
     util::{
         offset::{calc_pkg2_64_v1_length, calc_pkg2_64_v2_length, WzOffsetMeta, WzOffsetVersion},
-        profile::WzProfile,
+        profile::{Pkg2EntryNamePosition, WzProfile},
         version::PKGVersion,
     },
     wz_image, Reader, WzImage, WzNode, WzNodeArc, WzNodeArcVec, WzNodeName, WzObjectType, WzReader,
@@ -242,7 +242,7 @@ impl WzDirectory {
 
         let all_names_use_v2 = self.profile.all_names_use_pkg2_v2();
         let encrypt_entry_data = self.profile.encrypts_entry_data();
-        let names_follow_entry_data = self.profile.names_follow_entry_data();
+        let name_position = self.profile.entry_name_position();
 
         let mut wz_dir_entries: Vec<WzDirectoryEntry> = vec![];
         let mut current_total_size = 0;
@@ -260,7 +260,7 @@ impl WzDirectory {
                 reader,
                 wz_dir_entries.is_empty() || all_names_use_v2,
                 encrypt_entry_data,
-                names_follow_entry_data,
+                name_position,
                 self.hash,
                 self.profile.offset_version,
             )?;
@@ -446,7 +446,7 @@ impl WzDirectoryEntry {
         reader: &WzSliceReader,
         use_pkg2_dir_read: bool,
         encrypt_entry_data: bool,
-        name_follows_entry_data: bool,
+        name_position: Pkg2EntryNamePosition,
         hash: u64,
         offset_version: WzOffsetVersion,
     ) -> Result<Self, Error> {
@@ -455,19 +455,15 @@ impl WzDirectoryEntry {
             ..Default::default()
         };
 
-        match entry.dir_type {
-            WzDirectoryType::WzDirectory | WzDirectoryType::WzImage => {
-                if !name_follows_entry_data {
-                    if use_pkg2_dir_read && reader.pkg2_keys.read().unwrap().is_pkg2() {
-                        entry.name = reader.read_wz_string_pkg2_u64_dir_meta()?;
-                    } else {
-                        entry.name = reader.read_wz_string_meta()?;
-                    }
-                }
-            }
-            _ => {
-                return Err(Error::InvalidWzVersion);
-            }
+        if !matches!(
+            entry.dir_type,
+            WzDirectoryType::WzDirectory | WzDirectoryType::WzImage
+        ) {
+            return Err(Error::InvalidWzVersion);
+        }
+
+        if name_position == Pkg2EntryNamePosition::BeforeData {
+            entry.name = Self::read_pkg2_64_name(reader, use_pkg2_dir_read)?;
         }
 
         let size_pos = reader.pos.get() as u32;
@@ -492,15 +488,22 @@ impl WzDirectoryEntry {
         entry.size = size as usize;
         entry._checksum = checksum;
 
-        if name_follows_entry_data {
-            if use_pkg2_dir_read && reader.pkg2_keys.read().unwrap().is_pkg2() {
-                entry.name = reader.read_wz_string_pkg2_u64_dir_meta()?;
-            } else {
-                entry.name = reader.read_wz_string_meta()?;
-            }
+        if name_position == Pkg2EntryNamePosition::AfterData {
+            entry.name = Self::read_pkg2_64_name(reader, use_pkg2_dir_read)?;
         }
 
         Ok(entry)
+    }
+
+    fn read_pkg2_64_name(
+        reader: &WzSliceReader,
+        use_pkg2_dir_read: bool,
+    ) -> Result<WzStringMeta, Error> {
+        if use_pkg2_dir_read && reader.pkg2_keys.read().unwrap().is_pkg2() {
+            Ok(reader.read_wz_string_pkg2_u64_dir_meta()?)
+        } else {
+            Ok(reader.read_wz_string_meta()?)
+        }
     }
 
     pub fn verify(
@@ -522,7 +525,12 @@ impl WzDirectoryEntry {
             reader.seek(self.offset);
 
             let entry_count = if reader.header.is_pkg2_64() {
-                reader.read_wz_int64()?
+                let encrypted_entry_count = reader.read_wz_int64()?;
+                offset_version.get_entry_count_calculator()(
+                    &reader.header,
+                    hash,
+                    encrypted_entry_count,
+                )? as i64
             } else {
                 reader.read_wz_int()? as i64
             };

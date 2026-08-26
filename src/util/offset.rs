@@ -31,7 +31,7 @@ impl WzOffsetVersion {
         match self {
             WzOffsetVersion::Pkg2_64V1 => decrypt_pkg2_entry_count_64_v1,
             WzOffsetVersion::Pkg2_64V2 => decrypt_pkg2_entry_count_64_v2,
-            _ => unreachable!(),
+            _ => decrypt_pkg2_entry_count_ident,
         }
     }
 }
@@ -246,4 +246,12 @@ pub fn decrypt_pkg2_entry_count_64_v2(
         return Err(directory::Error::InvalidEntryCount);
     }
     Ok(dir_count as usize)
+}
+
+pub fn decrypt_pkg2_entry_count_ident(
+    _header: &WzHeader,
+    _hash: u64,
+    _encrypted_entry_count: i64,
+) -> EntryCountResult<usize> {
+    Err(directory::Error::InvalidEntryCount)
 }
